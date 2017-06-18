@@ -1,0 +1,259 @@
+---
+title: "Investigating the impact of severe weather events on public health and 
+the economy"
+author: "Ioannis Moros"
+date: "June 18, 2017"
+output: html_document
+---
+
+# Synopsis
+Storms and other severe weather events can cause both public health and economic 
+problems for communities and municipalities. Many severe events can result in 
+fatalities, injuries, and property damage, and preventing such outcomes to the 
+extent possible is a key concern.
+
+This paper explores the U.S. National Oceanic and Atmospheric Administration's 
+(NOAA) storm database. This database tracks characteristics of major storms and 
+weather events in the United States, including when and where they occur, as 
+well as estimates of any fatalities, injuries, and property damage. 
+
+The aim of this analysis is to identify which types of events are most harmful 
+with respect to population health and which
+types of events have the greatest economic consequences.
+
+The results of the analysis show that tornadoes are the most harmful weather event
+with respect to population health, in terms of both injuries and fatalities. 
+Regarding the total economic impact, floods are the most destructive event.
+Most property losses are attributed to floods, while drought is responsible 
+for the most damage to crops.
+
+# R/Knit setup
+
+Before the actual data processing we define the knitr parameters and require the
+necessary R packages.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE)
+```
+
+```{r pack}
+## Required packages
+require(plyr)
+require(reshape2)
+require(ggplot2)
+```
+
+# Data Processing
+
+1. Download and read the raw data.
+
+```{r dl}
+
+if(!file.exists("./data")) {
+        dir.create("./data")
+        url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+        file_dest <- "./data/repdata%2Fdata%2FStormData.csv.bz2"
+        download.file(url, file_dest)
+}
+
+A <- read.csv("./data/repdata%2Fdata%2FStormData.csv.bz2")
+```
+
+2. Subset the raw table to include only the variables of interest
+
+```{r subsetA.1}
+Asub <- subset(A, select = c("EVTYPE", "FATALITIES", "INJURIES",
+                             "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP"))
+```
+
+3. Investigate the variables that hold the exponential component of economic
+and health damage.
+
+```{r summary.1}
+summary(Asub$PROPDMGEXP)
+summary(Asub$CROPDMGEXP)
+```
+
+4. In order to get the actual value of the damage, these 2 
+variables will need to be converted to numeric, then multiplied by the respective
+value of damage. Notice that the variables contain both uppercase and
+lower case values. As such, the first step is to convert all the values to 
+uppercase.
+
+```{r uppercase}
+Asub$PROPDMGEXP <- toupper(Asub$PROPDMGEXP)
+Asub$CROPDMGEXP <- toupper(Asub$CROPDMGEXP)
+```
+
+5. Now we are ready to convert their values to numeric.
+
+```{r numeric.transf}
+Asub$CROPDMGEXP <- revalue(Asub$CROPDMGEXP, c("?" = 1,
+                                        "0" = 1,
+                                        "2" = 10^2,
+                                        "K" = 10^3,
+                                        "M" = 10^6,
+                                        "B" = 10^9
+))
+
+Asub$CROPDMGEXP <- as.numeric(as.character(Asub$CROPDMGEXP))
+Asub$CROPDMGEXP[is.na(Asub$CROPDMGEXP)] <- 1
+
+Asub$PROPDMGEXP <- revalue(Asub$PROPDMGEXP, c("?" = 1,
+                                              "+" = 1,
+                                              "-" = 1,
+                                              "0" = 1,
+                                              "1" = 1,
+                                              "2" = 10^2,
+                                              "H" = 10^2,
+                                              "3" = 10^3,
+                                              "K" = 10^3,
+                                              "4" = 10^4,
+                                              "5" = 10^5,
+                                              "6" = 10^6,
+                                              "M" = 10^6,
+                                              "7" = 10^7,
+                                              "8" = 10^8,
+                                              "B" = 10^9      
+))
+
+Asub$PROPDMGEXP <- as.numeric(as.character(Asub$PROPDMGEXP))
+Asub$PROPDMGEXP[is.na(Asub$PROPDMGEXP)] <- 1
+```
+        
+6. Let's take a look at the levels of the EXP variables now.
+
+```{r exp.levels}
+levels(as.factor(Asub$CROPDMGEXP))
+levels(as.factor(Asub$PROPDMGEXP))
+```
+ 
+7. Calculate the total amount of damage and store it as a new variable within 
+the same matrix.
+
+```{r totaldmg}
+Asub$cropdamage <- Asub$CROPDMG * Asub$CROPDMGEXP
+Asub$propdamage <- Asub$PROPDMG * Asub$PROPDMGEXP
+```
+
+8. First for the economic damage - Create 3 aggregate matrices with the total 
+crop/property/total economic damage by type of event. 
+Then create a 4th matrix that combines the other 3 (column-bound) 
+and rename the columns.
+
+```{r aggr}
+Crop_dmg_agr <- aggregate(cropdamage ~ EVTYPE, data = Asub, FUN = sum)
+Prop_dmg_agr <- aggregate(propdamage ~ EVTYPE, data = Asub, FUN = sum)
+Econ_dmg_agr <- aggregate(cropdamage + propdamage ~ EVTYPE, data = Asub, FUN = sum)
+
+Econ_dmg_full <- cbind(Econ_dmg_agr, Crop_dmg_agr[2], Prop_dmg_agr[2])
+colnames(Econ_dmg_full) <- c("event", "total", "crop", "property")
+``` 
+
+9. Order the matrices created in step 8 by damage (descending). Then, only keep
+the first 10 rows of the full economic damage matrix, i.e. the top 10 most 
+impactful types of events with respect to all types of economic damage.
+
+```{r order}
+Crop_dmg_agr <- arrange(Crop_dmg_agr, desc(cropdamage))
+Prop_dmg_agr <- arrange(Prop_dmg_agr, desc(propdamage))
+Econ_dmg_agr <- arrange(Econ_dmg_agr, desc(Econ_dmg_agr[2]))
+Econ_dmg_full <- arrange(Econ_dmg_full, desc(Econ_dmg_full[2]))
+
+Econ_dmg_full <- Econ_dmg_full[1:10, ]
+```
+
+10. Create a long version of the full combined matrix. This will be useful later 
+to construct the plots.
+
+```{r melt}
+E_melt <- melt(data = Econ_dmg_full, id.vars = "event", value.name = "damage")
+```
+
+11. Repeat steps 8-10 to create and transform similar matrices for health damage.
+
+```{r health.trans}
+Injuries_agr <- aggregate(INJURIES ~ EVTYPE, data = Asub, FUN = sum)
+Fatalities_agr <- aggregate(FATALITIES ~ EVTYPE, data = Asub, FUN = sum)
+Health_dmg_agr <- aggregate(FATALITIES + INJURIES ~ EVTYPE, data = Asub, FUN = sum)
+
+Health_dmg_full <- cbind(Health_dmg_agr, Injuries_agr[2], Fatalities_agr[2])
+colnames(Health_dmg_full) <- c("event", "total", "injuries", "fatalities")
+
+Injuries_agr <- arrange(Injuries_agr, desc(INJURIES))
+Fatalities_agr <- arrange(Fatalities_agr, desc(FATALITIES))
+Health_dmg_agr <- arrange(Health_dmg_agr, desc(Health_dmg_agr[2]))
+Health_dmg_full <- arrange(Health_dmg_full, desc(Health_dmg_full[2]))
+
+Health_dmg_full <- Health_dmg_full[1:10, ]
+
+H_melt <- melt(data = Health_dmg_full, id.vars = "event", value.name = "count")
+```
+
+# Results
+
+1. Weather events responsible for the most damage to crops.
+
+```{r cropdmg}
+head(Crop_dmg_agr, 5)
+```
+
+2. Weather events that have caused the most property losses.
+
+```{r propdmg}
+head(Prop_dmg_agr, 5)
+```
+
+3. Weather events that have caused the most total economic damage
+
+```{r econdmg}
+head(Econ_dmg_agr, 5)
+```
+
+4. Weather events responsible for the most fatalities
+
+```{r fatal}
+head(Fatalities_agr, 5)
+```
+
+5. Weather events that have caused the most injuries
+
+```{r injur}
+head(Injuries_agr, 5)
+```
+
+6. Weather events that have the biggest impact on population health
+
+```{r healthdmg}
+head(Health_dmg_agr, 5)
+```
+
+
+
+This can be visualised better in the following two plots.
+
+7. Plot of economic damage by type of event.
+
+```{r econplot}
+g <- ggplot(E_melt, aes(event, damage, fill = variable))
+g + geom_bar(position = "dodge", stat = "identity") + 
+        theme(legend.title = element_blank(), 
+              axis.text.x = element_text(angle = 45, hjust = 1)) +
+        ggtitle("Economic damage by type of event")
+```
+
+8. Plot of health damage by type of event.
+
+```{r healthplot}
+p <- ggplot(H_melt, aes(event, count, fill = variable))
+p + geom_bar(position = "dodge", stat = "identity") + 
+        theme(legend.title = element_blank(), 
+              axis.text.x = element_text(angle = 45, hjust = 1)) +
+        ggtitle("Health damage by type of event")
+```
+
+The results presented above reveal that tornadoes are the most harmful weather event
+with respect to population health, in terms of both injuries and fatalities. 
+Regarding the total economic impact, floods are the most destructive weather event
+overall. Most properies have been lost due to floods, while most crops are destroyed
+by drought.
